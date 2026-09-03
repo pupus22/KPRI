@@ -147,6 +147,7 @@ Jika langkah ini dilewati, login di alamat GitHub Pages dapat ditolak Firebase.
 8. Menu **Bon**, **Barang**, dan **Pembeli** juga memiliki tombol **Edit** dan **Hapus**.
 9. Menghapus barang akan menyembunyikannya dari pilihan penjualan baru. Stok dan riwayat lamanya tetap tersimpan untuk pelacakan.
 10. Pembeli yang masih mempunyai bon tidak dapat dihapus sebelum bon dilunasi atau transaksi bon dibatalkan.
+11. Saat mencatat transaksi, petugas hanya mengisi jumlah barang. Harga otomatis diambil dari **Harga Jual** pada Master Barang dan tidak dapat diedit dari transaksi.
 6. Coba pembayaran bon serta Ekspor Excel.
 
 ## Alur data yang dipakai

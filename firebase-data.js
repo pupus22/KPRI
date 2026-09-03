@@ -216,7 +216,7 @@ export async function addSale(data) {
     const items = data.items.map(item => {
       const product = products.get(item.productId);
       const qty = number(item.qty,"Jumlah",0.000001);
-      const unitPrice = item.unitPrice === "" ? Number(product.salePrice) : number(item.unitPrice,"Harga jual");
+      const unitPrice = number(product.salePrice,"Harga jual barang");
       return { id:crypto.randomUUID(), productId:item.productId, productName:product.name, sku:product.sku,
         qty, unit:product.unit, unitPrice:Math.round(unitPrice), purchasePrice:Number(product.purchasePrice),
         subtotal:Math.round(qty*unitPrice) };
@@ -353,7 +353,7 @@ export async function updateSale(saleId, data) {
     const items = data.items.map((item,index) => {
       const product = products.get(requestedProductIds[index]);
       const itemQty = number(item.qty,"Jumlah",0.000001);
-      const unitPrice = item.unitPrice === "" ? Number(product.salePrice) : number(item.unitPrice,"Harga jual");
+      const unitPrice = number(product.salePrice,"Harga jual barang");
       return { id:item.id || crypto.randomUUID(), productId:requestedProductIds[index], productName:product.name, sku:product.sku,
         qty:itemQty, unit:product.unit, unitPrice:Math.round(unitPrice), purchasePrice:Number(product.purchasePrice),
         subtotal:Math.round(itemQty*unitPrice) };

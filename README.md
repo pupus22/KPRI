@@ -4,6 +4,8 @@ Versi statis GitHub Pages + Firebase. Tidak menggunakan NPM dan tidak perlu pros
 
 Fitur utama mencakup stok, transaksi tunai/bon, cicilan, pelacakan, ekspor Excel, serta edit dan hapus pada transaksi, bon, barang, dan pembeli. Koreksi transaksi otomatis menyesuaikan stok dan sisa utang.
 
+Harga pada transaksi selalu mengikuti **Harga Jual** di Master Barang dan tidak dapat diketik atau diubah dari halaman transaksi.
+
 File utama:
 
 - `index.html` — halaman aplikasi

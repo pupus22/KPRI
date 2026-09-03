@@ -142,6 +142,8 @@ Jika langkah ini dilewati, login di alamat GitHub Pages dapat ditolak Firebase.
 3. Tambahkan satu barang percobaan.
 4. Coba transaksi tunai tanpa nama.
 5. Buat pembeli dan coba transaksi bon.
+6. Pada menu **Transaksi**, gunakan tombol **Edit** untuk mengoreksi item, jumlah, harga, pembeli, atau pembayaran. Alasan koreksi wajib diisi.
+7. Gunakan tombol **Hapus** untuk membatalkan transaksi salah. Stok dikembalikan dan cicilan terkait dibalik secara otomatis; jejak pembatalannya tetap disimpan.
 6. Coba pembayaran bon serta Ekspor Excel.
 
 ## Alur data yang dipakai

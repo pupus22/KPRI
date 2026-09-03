@@ -9,7 +9,7 @@
       "firebase.json",
       "firestore.rules",
       "firestore.indexes.json",
-      "PANDUAN.txt",
+      "PANDUAN.md",
       "README.md",
       ".git/**",
       ".github/**"

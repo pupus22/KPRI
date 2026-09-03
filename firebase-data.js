@@ -29,7 +29,7 @@ const code = prefix => {
 const iso = value => value?.toDate ? value.toDate().toISOString() : (typeof value === "string" ? value : new Date(0).toISOString());
 const newest = (a, b) => b.createdAt.localeCompare(a.createdAt);
 const mapProduct = row => ({ id: row.id, ...row.data(), createdAt: iso(row.data().createdAt) });
-const mapSale = row => ({ id: row.id, ...row.data(), createdAt: iso(row.data().createdAt) });
+const mapSale = row => ({ id: row.id, ...row.data(), createdAt: iso(row.data().createdAt), updatedAt:row.data().updatedAt?iso(row.data().updatedAt):null, voidedAt:row.data().voidedAt?iso(row.data().voidedAt):null });
 const mapPayment = row => ({ id: row.id, ...row.data(), createdAt: iso(row.data().createdAt) });
 const mapMovement = row => ({ id: row.id, ...row.data(), createdAt: iso(row.data().createdAt) });
 
@@ -51,7 +51,7 @@ async function listProducts() {
 }
 async function listSales() {
   const result = await getDocs(collection(db, "sales"));
-  return result.docs.map(mapSale).sort(newest);
+  return result.docs.map(mapSale).filter(sale => sale.voided !== true).sort(newest);
 }
 async function listCustomers(sales = null) {
   const [result, allSales] = await Promise.all([
@@ -184,7 +184,7 @@ export async function addSale(data) {
       cashReceived, changeReturned, debtApplied:debtAmount, remaining,
       status:paymentType==="tunai"?"lunas":"belum_lunas", notes:String(data.notes||""),
       itemSummary:items.map(item=>`${item.productName} (${item.qty} ${item.unit})`).join(", "),
-      itemCount:items.length, items, createdAt:serverTimestamp()
+      itemCount:items.length, items, voided:false, editCount:0, createdAt:serverTimestamp()
     });
     const running = new Map();
     items.forEach(item => {
@@ -219,6 +219,8 @@ export async function payDebt(saleId, amount, method, notes) {
     const snapshot = await transaction.get(saleRef);
     if (!snapshot.exists()) throw new Error("Bon tidak ditemukan");
     const sale = snapshot.data();
+    if (sale.voided === true) throw new Error("Transaksi sudah dibatalkan");
+    if (Number(sale.remaining) <= 0) throw new Error("Bon sudah lunas");
     if (amount > Number(sale.remaining)) throw new Error("Pembayaran melebihi sisa bon");
     const remaining = Number(sale.remaining)-amount;
     transaction.update(saleRef,{paidAmount:Number(sale.paidAmount)+amount,remaining,status:remaining===0?"lunas":"sebagian"});
@@ -226,6 +228,194 @@ export async function payDebt(saleId, amount, method, notes) {
       paymentNo:code("BYR"), saleId, sourceSaleId:null, targetInvoiceNo:sale.invoiceNo,
       customerId:sale.customerId||null, customerName:sale.customerName, amount,
       method:method||"Tunai", notes:notes||"", createdAt:serverTimestamp()
+    });
+  });
+}
+
+export async function updateSale(saleId, data) {
+  const paymentType = text(data.paymentType,"Jenis pembayaran");
+  if (!["tunai","bon"].includes(paymentType)) throw new Error("Jenis pembayaran tidak valid");
+  const customerId = String(data.customerId || "").trim();
+  if (paymentType === "bon" && !customerId) throw new Error("Pembeli wajib dipilih untuk transaksi bon");
+  if (!Array.isArray(data.items) || !data.items.length) throw new Error("Minimal satu barang wajib dipilih");
+  const reason = text(data.editNotes,"Alasan koreksi");
+
+  const [incomingResult,outgoingResult] = await Promise.all([
+    getDocs(query(collection(db,"payments"),where("saleId","==",saleId))),
+    getDocs(query(collection(db,"payments"),where("sourceSaleId","==",saleId)))
+  ]);
+  const incoming = incomingResult.docs.filter(row => row.data().voided !== true);
+  const outgoing = outgoingResult.docs.filter(row => row.data().voided !== true);
+
+  return runTransaction(db, async transaction => {
+    const saleRef = doc(db,"sales",saleId);
+    const saleSnapshot = await transaction.get(saleRef);
+    if (!saleSnapshot.exists()) throw new Error("Transaksi tidak ditemukan");
+    const previous = saleSnapshot.data();
+    if (previous.voided === true) throw new Error("Transaksi sudah dibatalkan");
+    if ((incoming.length || outgoing.length) && paymentType !== previous.paymentType) {
+      throw new Error("Jenis pembayaran tidak dapat diubah karena sudah terhubung dengan cicilan");
+    }
+    if ((incoming.length || outgoing.length) && customerId !== String(previous.customerId || "")) {
+      throw new Error("Pembeli tidak dapat diubah karena sudah terhubung dengan cicilan");
+    }
+
+    let customer = null;
+    if (customerId) {
+      const customerSnapshot = await transaction.get(doc(db,"customers",customerId));
+      if (!customerSnapshot.exists()) throw new Error("Pembeli tidak ditemukan");
+      customer = customerSnapshot.data();
+    }
+
+    const requestedProductIds = data.items.map(item => text(item.productId,"Barang"));
+    const previousProductIds = (previous.items || []).map(item => item.productId);
+    const productIds = [...new Set([...requestedProductIds,...previousProductIds])];
+    const products = new Map();
+    for (const productId of productIds) {
+      const snapshot = await transaction.get(doc(db,"products",productId));
+      if (!snapshot.exists()) throw new Error("Barang tidak ditemukan");
+      products.set(productId,snapshot.data());
+    }
+
+    const items = data.items.map((item,index) => {
+      const product = products.get(requestedProductIds[index]);
+      const itemQty = number(item.qty,"Jumlah",0.000001);
+      const unitPrice = item.unitPrice === "" ? Number(product.salePrice) : number(item.unitPrice,"Harga jual");
+      return { id:item.id || crypto.randomUUID(), productId:requestedProductIds[index], productName:product.name, sku:product.sku,
+        qty:itemQty, unit:product.unit, unitPrice:Math.round(unitPrice), purchasePrice:Number(product.purchasePrice),
+        subtotal:Math.round(itemQty*unitPrice) };
+    });
+
+    const oldQty = new Map(), newQty = new Map();
+    (previous.items || []).forEach(item => oldQty.set(item.productId,(oldQty.get(item.productId)||0)+Number(item.qty)));
+    items.forEach(item => newQty.set(item.productId,(newQty.get(item.productId)||0)+Number(item.qty)));
+    const nextStocks = new Map();
+    productIds.forEach(productId => {
+      const next = Number(products.get(productId).stock)+(oldQty.get(productId)||0)-(newQty.get(productId)||0);
+      if (next < 0) throw new Error(`Stok ${products.get(productId).name} tidak cukup untuk koreksi ini`);
+      nextStocks.set(productId,next);
+    });
+
+    const total = items.reduce((sum,item) => sum+item.subtotal,0);
+    const linkedDebtAmount = outgoing.reduce((sum,row) => sum+Number(row.data().amount||0),0);
+    let paidAmount, cashReceived, changeReturned, remaining, status;
+    if (paymentType === "tunai") {
+      cashReceived = Math.round(number(data.cashReceived,"Uang diterima"));
+      if (cashReceived < total+linkedDebtAmount) throw new Error("Uang diterima kurang dari total dan cicilan yang sudah dialihkan");
+      paidAmount = total; remaining = 0; status = "lunas";
+      changeReturned = cashReceived-total-linkedDebtAmount;
+    } else {
+      cashReceived = 0; changeReturned = 0;
+      paidAmount = previous.paymentType==="bon" ? Number(previous.paidAmount||0) : 0;
+      if (total < paidAmount) throw new Error("Total baru lebih kecil dari cicilan yang sudah dibayar");
+      remaining = total-paidAmount;
+      status = remaining===0 ? "lunas" : paidAmount>0 ? "sebagian" : "belum_lunas";
+    }
+
+    transaction.update(saleRef, {
+      customerId:customerId||null, customerName:customer?.name||"Pembeli umum",
+      phone:customer?.phone||"", address:customer?.address||"", paymentType, total, paidAmount,
+      cashReceived, changeReturned, debtApplied:linkedDebtAmount, remaining, status,
+      itemSummary:items.map(item=>`${item.productName} (${item.qty} ${item.unit})`).join(", "),
+      itemCount:items.length, items, editNotes:reason,
+      editCount:Number(previous.editCount||0)+1, updatedAt:serverTimestamp()
+    });
+
+    productIds.forEach(productId => {
+      const delta = (oldQty.get(productId)||0)-(newQty.get(productId)||0);
+      if (!delta) return;
+      const balance = nextStocks.get(productId);
+      transaction.update(doc(db,"products",productId),{stock:balance,updatedAt:serverTimestamp()});
+      transaction.set(doc(collection(db,"stockMovements")), {
+        productId, movementType:"koreksi_edit_transaksi", qtyChange:delta, balanceAfter:balance,
+        referenceType:"transaksi", referenceId:saleId,
+        notes:`Koreksi ${previous.invoiceNo}: ${reason}`, createdAt:serverTimestamp()
+      });
+    });
+    return previous.invoiceNo;
+  });
+}
+
+export async function voidSale(saleId, reason) {
+  reason = text(reason,"Alasan pembatalan");
+  const [incomingResult,outgoingResult] = await Promise.all([
+    getDocs(query(collection(db,"payments"),where("saleId","==",saleId))),
+    getDocs(query(collection(db,"payments"),where("sourceSaleId","==",saleId)))
+  ]);
+  const incoming = incomingResult.docs.filter(row => row.data().voided !== true);
+  const outgoing = outgoingResult.docs.filter(row => row.data().voided !== true);
+
+  await runTransaction(db, async transaction => {
+    const saleRef = doc(db,"sales",saleId);
+    const saleSnapshot = await transaction.get(saleRef);
+    if (!saleSnapshot.exists()) throw new Error("Transaksi tidak ditemukan");
+    const sale = saleSnapshot.data();
+    if (sale.voided === true) throw new Error("Transaksi sudah dibatalkan");
+
+    const soldQty = new Map();
+    (sale.items||[]).forEach(item => soldQty.set(item.productId,(soldQty.get(item.productId)||0)+Number(item.qty)));
+    const products = new Map();
+    for (const productId of soldQty.keys()) {
+      const snapshot = await transaction.get(doc(db,"products",productId));
+      if (!snapshot.exists()) throw new Error("Barang transaksi tidak ditemukan");
+      products.set(productId,snapshot.data());
+    }
+
+    const linkedIds = [...new Set([
+      ...incoming.map(row=>row.data().sourceSaleId).filter(Boolean),
+      ...outgoing.map(row=>row.data().saleId).filter(Boolean)
+    ])].filter(id=>id!==saleId);
+    const linkedSales = new Map();
+    for (const id of linkedIds) {
+      const snapshot = await transaction.get(doc(db,"sales",id));
+      if (snapshot.exists()) linkedSales.set(id,snapshot.data());
+    }
+
+    soldQty.forEach((amount,productId) => {
+      const balance = Number(products.get(productId).stock)+amount;
+      transaction.update(doc(db,"products",productId),{stock:balance,updatedAt:serverTimestamp()});
+      transaction.set(doc(collection(db,"stockMovements")), {
+        productId, movementType:"pembatalan_transaksi", qtyChange:amount, balanceAfter:balance,
+        referenceType:"transaksi", referenceId:saleId,
+        notes:`Pembatalan ${sale.invoiceNo}: ${reason}`, createdAt:serverTimestamp()
+      });
+    });
+
+    const returnedToSources = new Map();
+    incoming.forEach(row => {
+      const sourceId = row.data().sourceSaleId;
+      if (sourceId) returnedToSources.set(sourceId,(returnedToSources.get(sourceId)||0)+Number(row.data().amount||0));
+      transaction.update(row.ref,{voided:true,voidReason:reason,voidedAt:serverTimestamp()});
+    });
+    returnedToSources.forEach((amount,sourceId) => {
+      const source = linkedSales.get(sourceId);
+      if (!source || source.voided===true) return;
+      transaction.update(doc(db,"sales",sourceId),{
+        debtApplied:Math.max(0,Number(source.debtApplied||0)-amount),
+        changeReturned:Number(source.changeReturned||0)+amount,
+        updatedAt:serverTimestamp()
+      });
+    });
+
+    const restoredToTargets = new Map();
+    outgoing.forEach(row => {
+      const targetId = row.data().saleId;
+      if (targetId) restoredToTargets.set(targetId,(restoredToTargets.get(targetId)||0)+Number(row.data().amount||0));
+      transaction.update(row.ref,{voided:true,voidReason:reason,voidedAt:serverTimestamp()});
+    });
+    restoredToTargets.forEach((amount,targetId) => {
+      const target = linkedSales.get(targetId);
+      if (!target || target.voided===true) return;
+      const paidAmount = Math.max(0,Number(target.paidAmount||0)-amount);
+      const remaining = Math.min(Number(target.total||0),Number(target.remaining||0)+amount);
+      transaction.update(doc(db,"sales",targetId),{
+        paidAmount,remaining,status:remaining===0?"lunas":paidAmount>0?"sebagian":"belum_lunas",
+        updatedAt:serverTimestamp()
+      });
+    });
+
+    transaction.update(saleRef,{
+      voided:true,voidReason:reason,voidedAt:serverTimestamp(),updatedAt:serverTimestamp()
     });
   });
 }
@@ -239,7 +429,7 @@ export async function getTrace(kind, id) {
       getDocs(query(collection(db,"payments"),where("saleId","==",id))),
       getDocs(query(collection(db,"payments"),where("sourceSaleId","==",id)))
     ]);
-    return {kind,sale,items:sale.items||[],payments:paymentsResult.docs.map(mapPayment).sort(newest),allocations:allocationsResult.docs.map(mapPayment).sort(newest)};
+    return {kind,sale,items:sale.items||[],payments:paymentsResult.docs.filter(row=>row.data().voided!==true).map(mapPayment).sort(newest),allocations:allocationsResult.docs.filter(row=>row.data().voided!==true).map(mapPayment).sort(newest)};
   }
   if (kind === "customer") {
     const snapshot = await getDoc(doc(db,"customers",id));

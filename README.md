@@ -2,7 +2,7 @@
 
 Versi statis GitHub Pages + Firebase. Tidak menggunakan NPM dan tidak perlu proses build.
 
-Fitur utama mencakup stok, transaksi tunai/bon, cicilan, pelacakan, ekspor Excel, serta edit dan pembatalan transaksi dengan koreksi stok otomatis.
+Fitur utama mencakup stok, transaksi tunai/bon, cicilan, pelacakan, ekspor Excel, serta edit dan hapus pada transaksi, bon, barang, dan pembeli. Koreksi transaksi otomatis menyesuaikan stok dan sisa utang.
 
 File utama:
 

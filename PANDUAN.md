@@ -144,6 +144,9 @@ Jika langkah ini dilewati, login di alamat GitHub Pages dapat ditolak Firebase.
 5. Buat pembeli dan coba transaksi bon.
 6. Pada menu **Transaksi**, gunakan tombol **Edit** untuk mengoreksi item, jumlah, harga, pembeli, atau pembayaran. Alasan koreksi wajib diisi.
 7. Gunakan tombol **Hapus** untuk membatalkan transaksi salah. Stok dikembalikan dan cicilan terkait dibalik secara otomatis; jejak pembatalannya tetap disimpan.
+8. Menu **Bon**, **Barang**, dan **Pembeli** juga memiliki tombol **Edit** dan **Hapus**.
+9. Menghapus barang akan menyembunyikannya dari pilihan penjualan baru. Stok dan riwayat lamanya tetap tersimpan untuk pelacakan.
+10. Pembeli yang masih mempunyai bon tidak dapat dihapus sebelum bon dilunasi atau transaksi bon dibatalkan.
 6. Coba pembayaran bon serta Ekspor Excel.
 
 ## Alur data yang dipakai

@@ -28,9 +28,9 @@ const code = prefix => {
 };
 const iso = value => value?.toDate ? value.toDate().toISOString() : (typeof value === "string" ? value : new Date(0).toISOString());
 const newest = (a, b) => b.createdAt.localeCompare(a.createdAt);
-const mapProduct = row => ({ id: row.id, ...row.data(), createdAt: iso(row.data().createdAt) });
+const mapProduct = row => ({ id: row.id, ...row.data(), createdAt: iso(row.data().createdAt), updatedAt:row.data().updatedAt?iso(row.data().updatedAt):null, archivedAt:row.data().archivedAt?iso(row.data().archivedAt):null });
 const mapSale = row => ({ id: row.id, ...row.data(), createdAt: iso(row.data().createdAt), updatedAt:row.data().updatedAt?iso(row.data().updatedAt):null, voidedAt:row.data().voidedAt?iso(row.data().voidedAt):null });
-const mapPayment = row => ({ id: row.id, ...row.data(), createdAt: iso(row.data().createdAt) });
+const mapPayment = row => ({ id: row.id, ...row.data(), createdAt: iso(row.data().createdAt), voidedAt:row.data().voidedAt?iso(row.data().voidedAt):null });
 const mapMovement = row => ({ id: row.id, ...row.data(), createdAt: iso(row.data().createdAt) });
 
 export { firebaseConfigured };
@@ -45,33 +45,42 @@ export async function checkAccess(user) {
   } catch { return false; }
 }
 
-async function listProducts() {
+async function listProducts(includeArchived = false) {
   const result = await getDocs(collection(db, "products"));
-  return result.docs.map(mapProduct).sort((a,b) => a.name.localeCompare(b.name,"id"));
+  const rows = result.docs.map(mapProduct).sort((a,b) => a.name.localeCompare(b.name,"id"));
+  return includeArchived ? rows : rows.filter(row => row.archived !== true);
 }
-async function listSales() {
+async function listSales(includeVoided = false) {
   const result = await getDocs(collection(db, "sales"));
-  return result.docs.map(mapSale).filter(sale => sale.voided !== true).sort(newest);
+  const rows=result.docs.map(mapSale).sort(newest);
+  return includeVoided?rows:rows.filter(sale => sale.voided !== true);
 }
-async function listCustomers(sales = null) {
+async function listCustomers(sales = null, includeArchived = false) {
   const [result, allSales] = await Promise.all([
     getDocs(collection(db, "customers")),
     sales ? Promise.resolve(sales) : listSales()
   ]);
-  return result.docs.map(row => {
+  const rows = result.docs.map(row => {
     const transactions = allSales.filter(sale => sale.customerId === row.id);
     return {
       id: row.id, ...row.data(), createdAt: iso(row.data().createdAt),
+      updatedAt:row.data().updatedAt?iso(row.data().updatedAt):null,
+      archivedAt:row.data().archivedAt?iso(row.data().archivedAt):null,
       debtBalance: transactions.reduce((sum,sale) => sum + Number(sale.remaining || 0), 0),
       transactionCount: transactions.length
     };
   }).sort((a,b) => a.name.localeCompare(b.name,"id"));
+  return includeArchived ? rows : rows.filter(row => row.archived !== true);
 }
 
 export async function loadData() {
-  const [products, sales] = await Promise.all([listProducts(), listSales()]);
-  const customers = await listCustomers(sales);
-  return { products, sales, customers, debts: sales.filter(sale => Number(sale.remaining) > 0) };
+  const [allProducts, sales] = await Promise.all([listProducts(true), listSales()]);
+  const allCustomers = await listCustomers(sales,true);
+  return {
+    products:allProducts.filter(row=>row.archived!==true), allProducts, sales,
+    customers:allCustomers.filter(row=>row.archived!==true), allCustomers,
+    debts:sales.filter(sale => Number(sale.remaining) > 0)
+  };
 }
 
 export async function addCustomer(data) {
@@ -80,9 +89,41 @@ export async function addCustomer(data) {
     phone: String(data.phone || "").trim(),
     address: String(data.address || "").trim(),
     notes: String(data.notes || "").trim(),
-    createdAt: serverTimestamp()
+    archived:false, editCount:0, createdAt: serverTimestamp()
   });
   return result.id;
+}
+
+export async function updateCustomer(customerId, data) {
+  const name = text(data.name,"Nama pembeli");
+  const reason = text(data.editNotes,"Alasan koreksi");
+  const [customerSnapshot,salesResult,paymentsResult] = await Promise.all([
+    getDoc(doc(db,"customers",customerId)),
+    getDocs(query(collection(db,"sales"),where("customerId","==",customerId))),
+    getDocs(query(collection(db,"payments"),where("customerId","==",customerId)))
+  ]);
+  if (!customerSnapshot.exists() || customerSnapshot.data().archived===true) throw new Error("Pembeli tidak ditemukan");
+  const phone=String(data.phone||"").trim(), address=String(data.address||"").trim(), notes=String(data.notes||"").trim();
+  const batch=writeBatch(db);
+  batch.update(doc(db,"customers",customerId),{
+    name,phone,address,notes,editNotes:reason,
+    editCount:Number(customerSnapshot.data().editCount||0)+1,updatedAt:serverTimestamp()
+  });
+  salesResult.docs.forEach(row=>batch.update(row.ref,{customerName:name,phone,address,customerSyncedAt:serverTimestamp()}));
+  paymentsResult.docs.forEach(row=>batch.update(row.ref,{customerName:name}));
+  await batch.commit();
+}
+
+export async function archiveCustomer(customerId, reason) {
+  reason=text(reason,"Alasan penghapusan");
+  const salesResult=await getDocs(query(collection(db,"sales"),where("customerId","==",customerId)));
+  const activeDebt=salesResult.docs.some(row=>row.data().voided!==true&&Number(row.data().remaining||0)>0);
+  if(activeDebt)throw new Error("Pembeli masih memiliki bon. Lunasi atau hapus transaksi bon terlebih dahulu");
+  await runTransaction(db,async transaction=>{
+    const customerRef=doc(db,"customers",customerId),snapshot=await transaction.get(customerRef);
+    if(!snapshot.exists()||snapshot.data().archived===true)throw new Error("Pembeli tidak ditemukan");
+    transaction.update(customerRef,{archived:true,archiveReason:reason,archivedAt:serverTimestamp(),updatedAt:serverTimestamp()});
+  });
 }
 
 export async function addProduct(data) {
@@ -96,13 +137,39 @@ export async function addProduct(data) {
     sku, name:text(data.name,"Nama barang"), category:String(data.category||"Umum").trim()||"Umum",
     unit:text(data.unit,"Satuan"), purchasePrice:Math.round(number(data.purchasePrice,"Harga beli")),
     salePrice:Math.round(number(data.salePrice,"Harga jual")), stock,
-    minStock:number(data.minStock||0,"Stok minimum"), createdAt:serverTimestamp(), updatedAt:serverTimestamp()
+    minStock:number(data.minStock||0,"Stok minimum"), archived:false, editCount:0, createdAt:serverTimestamp(), updatedAt:serverTimestamp()
   });
   batch.set(doc(collection(db,"stockMovements")), {
     productId:productRef.id, movementType:"stok_awal", qtyChange:stock, balanceAfter:stock,
     referenceType:"barang", referenceId:productRef.id, notes:"Stok awal saat barang dibuat", createdAt:serverTimestamp()
   });
   await batch.commit();
+}
+
+export async function updateProduct(productId, data) {
+  const sku=text(data.sku,"Kode / SKU").toUpperCase();
+  const duplicate=await getDocs(query(collection(db,"products"),where("sku","==",sku),limit(2)));
+  if(duplicate.docs.some(row=>row.id!==productId))throw new Error("Kode / SKU sudah digunakan");
+  const reason=text(data.editNotes,"Alasan koreksi");
+  await runTransaction(db,async transaction=>{
+    const productRef=doc(db,"products",productId),snapshot=await transaction.get(productRef);
+    if(!snapshot.exists()||snapshot.data().archived===true)throw new Error("Barang tidak ditemukan");
+    transaction.update(productRef,{
+      sku,name:text(data.name,"Nama barang"),category:String(data.category||"Umum").trim()||"Umum",
+      unit:text(data.unit,"Satuan"),purchasePrice:Math.round(number(data.purchasePrice,"Harga beli")),
+      salePrice:Math.round(number(data.salePrice,"Harga jual")),minStock:number(data.minStock||0,"Stok minimum"),
+      editNotes:reason,editCount:Number(snapshot.data().editCount||0)+1,updatedAt:serverTimestamp()
+    });
+  });
+}
+
+export async function archiveProduct(productId, reason) {
+  reason=text(reason,"Alasan penghapusan");
+  await runTransaction(db,async transaction=>{
+    const productRef=doc(db,"products",productId),snapshot=await transaction.get(productRef);
+    if(!snapshot.exists()||snapshot.data().archived===true)throw new Error("Barang tidak ditemukan");
+    transaction.update(productRef,{archived:true,archiveReason:reason,archivedAt:serverTimestamp(),updatedAt:serverTimestamp()});
+  });
 }
 
 export async function adjustStock(productId, delta, notes) {
@@ -136,12 +203,14 @@ export async function addSale(data) {
       const customerSnapshot = await transaction.get(doc(db,"customers",customerId));
       if (!customerSnapshot.exists()) throw new Error("Pembeli tidak ditemukan");
       customer = customerSnapshot.data();
+      if (customer.archived===true) throw new Error("Pembeli sudah dihapus dari daftar");
     }
     const productIds = [...new Set(data.items.map(item => text(item.productId,"Barang")))];
     const products = new Map();
     for (const productId of productIds) {
       const snapshot = await transaction.get(doc(db,"products",productId));
       if (!snapshot.exists()) throw new Error("Barang tidak ditemukan");
+      if (snapshot.data().archived===true) throw new Error("Barang sudah dihapus dari daftar");
       products.set(productId,snapshot.data());
     }
     const items = data.items.map(item => {
@@ -170,6 +239,7 @@ export async function addSale(data) {
       const snapshot = await transaction.get(doc(db,"sales",debtSaleId));
       if (!snapshot.exists()) throw new Error("Bon tidak ditemukan");
       targetDebt = snapshot.data();
+      if (targetDebt.voided===true) throw new Error("Bon sudah dibatalkan");
       if (!customerId || targetDebt.customerId !== customerId) throw new Error("Bon tidak sesuai pembeli");
       if (Number(targetDebt.remaining) <= 0) throw new Error("Bon sudah lunas");
       if (debtAmount > Number(targetDebt.remaining) || debtAmount > excess) throw new Error("Jumlah cicilan terlalu besar");
@@ -265,15 +335,18 @@ export async function updateSale(saleId, data) {
       const customerSnapshot = await transaction.get(doc(db,"customers",customerId));
       if (!customerSnapshot.exists()) throw new Error("Pembeli tidak ditemukan");
       customer = customerSnapshot.data();
+      if (customer.archived===true && customerId!==String(previous.customerId||"")) throw new Error("Pembeli sudah dihapus dari daftar");
     }
 
     const requestedProductIds = data.items.map(item => text(item.productId,"Barang"));
     const previousProductIds = (previous.items || []).map(item => item.productId);
+    const previousProductSet = new Set(previousProductIds);
     const productIds = [...new Set([...requestedProductIds,...previousProductIds])];
     const products = new Map();
     for (const productId of productIds) {
       const snapshot = await transaction.get(doc(db,"products",productId));
       if (!snapshot.exists()) throw new Error("Barang tidak ditemukan");
+      if (snapshot.data().archived===true && !previousProductSet.has(productId)) throw new Error("Barang sudah dihapus dari daftar");
       products.set(productId,snapshot.data());
     }
 
@@ -450,11 +523,11 @@ export async function getTrace(kind, id) {
 }
 
 export async function getExportData() {
-  const [data,paymentResult,movementResult] = await Promise.all([
-    loadData(),getDocs(collection(db,"payments")),getDocs(collection(db,"stockMovements"))
+  const [data,allSales,paymentResult,movementResult] = await Promise.all([
+    loadData(),listSales(true),getDocs(collection(db,"payments")),getDocs(collection(db,"stockMovements"))
   ]);
   return {
-    products:data.products, customers:data.customers, sales:data.sales,
+    products:data.allProducts, customers:data.allCustomers, sales:allSales,
     payments:paymentResult.docs.map(mapPayment).sort(newest),
     movements:movementResult.docs.map(mapMovement).sort(newest)
   };

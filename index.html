@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#087a55">
+  <meta name="description" content="Pencatatan barang, transaksi tunai, bon, cicilan, dan stok koperasi.">
+  <title>KOPRASI PLN AREA IV JAWA TIMUR</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="loginPage" class="login-page">
+    <section class="login-card">
+      <div class="brand"><span class="brand-mark">PLN</span><span><b>KOPRASI PLN AREA IV JAWA TIMUR</b><small>Sistem transaksi, stok, dan bon</small></span></div>
+      <div class="login-icon">🔐</div>
+      <h1>Masuk sebagai petugas</h1>
+      <p>Gunakan akun yang dibuat melalui Firebase Authentication.</p>
+      <div id="configWarning" class="warning hidden">Konfigurasi Firebase belum diisi. Buka <b>firebase-config.js</b>.</div>
+      <form id="loginForm" class="form-stack">
+        <label>Email<input id="loginEmail" type="email" autocomplete="email" required placeholder="petugas@contoh.com"></label>
+        <label>Kata sandi<input id="loginPassword" type="password" autocomplete="current-password" required></label>
+        <button class="btn primary" type="submit">Masuk</button>
+      </form>
+      <p id="loginError" class="error-text"></p>
+    </section>
+  </main>
+
+  <div id="app" class="app-shell hidden">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark">PLN</span><span><b>KOPRASI PLN AREA IV JAWA TIMUR</b><small>Pencatatan penjualan & bon</small></span></div>
+      <div class="top-actions">
+        <button id="exportBtn" class="btn outline">⇩ <span>Ekspor Excel</span></button>
+        <button id="newSaleBtn" class="btn primary">＋ Penjualan</button>
+        <button id="logoutBtn" class="btn ghost" title="Keluar">Keluar</button>
+      </div>
+    </header>
+
+    <div class="page-wrap">
+      <nav class="tabs" aria-label="Menu utama">
+        <button data-tab="dashboard" class="active">Ringkasan</button>
+        <button data-tab="transactions">Transaksi</button>
+        <button data-tab="debts">Bon <span id="debtCount" class="count hidden">0</span></button>
+        <button data-tab="products">Barang</button>
+        <button data-tab="customers">Pembeli</button>
+      </nav>
+      <section id="content" aria-live="polite"></section>
+    </div>
+  </div>
+
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-backdrop" data-close-modal></div>
+    <section class="modal-card">
+      <button class="modal-close" data-close-modal aria-label="Tutup">×</button>
+      <div id="modalContent"></div>
+    </section>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

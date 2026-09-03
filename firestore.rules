@@ -1,0 +1,22 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function petugasAktif() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.active == true;
+    }
+
+    match /users/{userId} {
+      allow read: if petugasAktif();
+      allow write: if false;
+    }
+
+    match /products/{id} { allow read, write: if petugasAktif(); }
+    match /customers/{id} { allow read, write: if petugasAktif(); }
+    match /sales/{id} { allow read, write: if petugasAktif(); }
+    match /payments/{id} { allow read, write: if petugasAktif(); }
+    match /stockMovements/{id} { allow read, write: if petugasAktif(); }
+  }
+}

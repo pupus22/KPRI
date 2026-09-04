@@ -1,6 +1,6 @@
 import {
   firebaseConfigured, watchAuth, login, logout, checkAccess, loadData, addCustomer, updateCustomer, archiveCustomer,
-  addProduct, updateProduct, archiveProduct, adjustStock, addSale, updateSale, voidSale, payDebt, getTrace, getExportData
+  addProduct, updateProduct, archiveProduct, adjustStock, addSale, updateSale, deleteSale, payDebt, getTrace, getExportData
 } from "./firebase-data.js";
 
 const $ = selector => document.querySelector(selector);
@@ -31,8 +31,7 @@ watchAuth(async user=>{
 if(!firebaseConfigured)$("#configWarning").classList.remove("hidden");
 $("#loginForm").addEventListener("submit",async event=>{event.preventDefault();$("#loginError").textContent="";if(!firebaseConfigured){$("#loginError").textContent="Isi firebase-config.js terlebih dahulu.";return}try{await login($("#loginEmail").value,$("#loginPassword").value)}catch{$("#loginError").textContent="Email atau kata sandi salah."}});
 $("#logoutBtn").addEventListener("click",logout);
-$("#newSaleBtn").addEventListener("click",showSaleModal);
-$("#exportBtn").addEventListener("click",exportExcel);
+$("#exportBtn").addEventListener("click",showExportModal);
 $("#modal").addEventListener("click",event=>{
   if(event.target.closest("[data-close-modal]"))return closeModal();
   const action=event.target.closest("[data-action]");if(!action)return;
@@ -105,14 +104,14 @@ function showProductModal(productId=""){
 
 function showDeleteCustomerModal(customerId){
   const customer=state.customers.find(row=>row.id===customerId);if(!customer)return;
-  openModal(`<h2>Hapus pembeli?</h2><p class="subtitle">${esc(customer.name)}</p><div class="warning">Pembeli akan hilang dari daftar. Riwayat transaksi lama tetap tersimpan. Pembeli yang masih memiliki bon tidak dapat dihapus.</div><form id="deleteCustomerForm" class="form-stack"><label>Alasan penghapusan<textarea name="reason" required></textarea></label><div class="actions"><button type="button" class="btn outline" data-close-modal>Batal</button><button class="btn danger">Hapus pembeli</button></div></form>`);
-  $("#deleteCustomerForm").onsubmit=async event=>{event.preventDefault();try{await archiveCustomer(customerId,formObject(event.currentTarget).reason);closeModal();await refresh("Pembeli berhasil dihapus dari daftar")}catch(error){toast(error.message,true)}};
+  openModal(`<h2>Hapus pembeli?</h2><p class="subtitle">${esc(customer.name)}</p><div class="warning">Data pembeli akan dihapus permanen dari Firebase. Nama pada transaksi lama tetap tersimpan. Pembeli yang masih memiliki bon tidak dapat dihapus.</div><form id="deleteCustomerForm" class="form-stack"><div class="actions"><button type="button" class="btn outline" data-close-modal>Batal</button><button class="btn danger">Hapus pembeli</button></div></form>`);
+  $("#deleteCustomerForm").onsubmit=async event=>{event.preventDefault();try{await archiveCustomer(customerId);closeModal();await refresh("Pembeli berhasil dihapus permanen")}catch(error){toast(error.message,true)}};
 }
 
 function showDeleteProductModal(productId){
   const product=state.products.find(row=>row.id===productId);if(!product)return;
-  openModal(`<h2>Hapus barang?</h2><p class="subtitle">${esc(product.name)} · stok ${qty(product.stock)} ${esc(product.unit)}</p><div class="warning">Barang akan hilang dari daftar dan tidak dapat dipilih pada transaksi baru. Stok serta riwayat transaksi lamanya tetap tersimpan untuk pelacakan.</div><form id="deleteProductForm" class="form-stack"><label>Alasan penghapusan<textarea name="reason" required></textarea></label><div class="actions"><button type="button" class="btn outline" data-close-modal>Batal</button><button class="btn danger">Hapus barang</button></div></form>`);
-  $("#deleteProductForm").onsubmit=async event=>{event.preventDefault();try{await archiveProduct(productId,formObject(event.currentTarget).reason);closeModal();await refresh("Barang berhasil dihapus dari daftar")}catch(error){toast(error.message,true)}};
+  openModal(`<h2>Hapus barang?</h2><p class="subtitle">${esc(product.name)} · stok ${qty(product.stock)} ${esc(product.unit)}</p><div class="warning">Master barang dan pergerakan stoknya akan dihapus permanen dari Firebase. Nama, jumlah, dan harga pada transaksi lama tetap tersimpan.</div><form id="deleteProductForm" class="form-stack"><div class="actions"><button type="button" class="btn outline" data-close-modal>Batal</button><button class="btn danger">Hapus barang</button></div></form>`);
+  $("#deleteProductForm").onsubmit=async event=>{event.preventDefault();try{await archiveProduct(productId);closeModal();await refresh("Barang berhasil dihapus permanen")}catch(error){toast(error.message,true)}};
 }
 function showStockModal(id){
   const product=state.products.find(p=>p.id===id);if(!product)return;
@@ -139,12 +138,19 @@ function showSaleModal(saleId=""){
     lines:(existing.items||[]).map(item=>({id:item.id,productId:item.productId,qty:item.qty,unitPrice:catalogProducts.find(row=>row.id===item.productId)?.salePrice||0}))
   }:{paymentType:"tunai",customerId:"",cashReceived:"",useExcess:false,debtSaleId:"",debtAmount:"",showNew:false,newName:"",newPhone:"",newAddress:"",editNotes:"",lines:[{productId:"",qty:1,unitPrice:""}]};
   const total=()=>sale.lines.reduce((sum,line)=>{const p=catalogProducts.find(x=>x.id===line.productId);return sum+Number(line.qty||0)*Number(p?.salePrice||0)},0);
-  const customerDebts=()=>state.debts.filter(d=>d.customerId===sale.customerId&&d.id!==saleId);
+  const customerDebts=()=>state.debts.filter(d=>d.customerId===sale.customerId&&d.id!==saleId).sort((a,b)=>a.createdAt.localeCompare(b.createdAt));
   const draw=()=>{
-    const totalValue=total(),cash=Number(sale.cashReceived||0),excess=Math.max(0,cash-totalValue),target=customerDebts().find(d=>d.id===sale.debtSaleId),applied=editing?fixedDebtApplied:sale.useExcess?Math.min(Number(sale.debtAmount||0),excess,Number(target?.remaining||0)):0,change=Math.max(0,excess-applied);
+    const totalValue=total(),cash=Number(sale.cashReceived||0),excess=Math.max(0,cash-totalValue),debts=customerDebts(),target=debts[0];
+    let budget=excess;const debtPlan=[];
+    if(!editing&&sale.useExcess)debts.forEach(debt=>{if(budget<=0)return;const amount=Math.min(budget,Number(debt.remaining));if(amount>0){debtPlan.push({debt,amount});budget-=amount}});
+    const applied=editing?fixedDebtApplied:debtPlan.reduce((sum,row)=>sum+row.amount,0),change=Math.max(0,excess-applied);
     const productOptions=line=>catalogProducts.map(p=>`<option value="${p.id}" ${line.productId===p.id?"selected":""}>${esc(p.name)}${p.archived?" (dihapus)":""} · ${money(p.salePrice)} · stok ${qty(p.stock)} ${esc(p.unit)}</option>`).join("");
     const customerOptions=catalogCustomers.map(c=>`<option value="${c.id}" ${sale.customerId===c.id?"selected":""}>${esc(c.name)}${c.archived?" (dihapus)":""}</option>`).join("");
     openModal(`<h2>${editing?`Edit ${esc(existing.invoiceNo)}`:"Catat penjualan"}</h2><p class="subtitle">${editing?"Koreksi otomatis menyesuaikan stok dan sisa bon.":"Pilih barang, jumlah, dan pembayaran."}</p><form id="saleForm"><div class="form-grid"><label>Jenis pembayaran<select id="paymentType"><option value="tunai" ${sale.paymentType==="tunai"?"selected":""}>Tunai / lunas</option><option value="bon" ${sale.paymentType==="bon"?"selected":""}>Bon / utang</option></select></label><label>${sale.paymentType==="bon"?"Pembeli (wajib)":"Pembeli (opsional)"}<select id="saleCustomer">${sale.paymentType==="tunai"?'<option value="">Tanpa nama / pembeli umum</option>':'<option value="">Pilih pembeli</option>'}${customerOptions}</select></label></div>${sale.paymentType==="bon"?`<button id="toggleNewCustomer" type="button" class="btn outline">＋ ${sale.showNew?"Tutup input":"Tambah pembeli baru"}</button>`:""}${sale.showNew?`<div class="inline-customer"><b>Pembeli belum terdaftar</b><div class="form-grid"><label>Nama<input id="newName" value="${esc(sale.newName)}"></label><label>Telepon<input id="newPhone" value="${esc(sale.newPhone)}"></label><label>Alamat<input id="newAddress" value="${esc(sale.newAddress)}"></label><button id="saveNewCustomer" type="button" class="btn primary">Simpan & pilih</button></div></div>`:""}<div class="line-head"><b>Barang yang dibeli</b><button id="addLine" type="button" class="btn outline">＋ Tambah baris</button></div><div class="sale-lines">${sale.lines.map((line,index)=>{const p=state.products.find(x=>x.id===line.productId);return`<div class="sale-line"><select data-line="${index}" data-field="productId"><option value="">Pilih barang</option>${productOptions(line)}</select><input data-line="${index}" data-field="qty" type="number" min="0.01" step="any" value="${line.qty}"><input data-line="${index}" data-field="unitPrice" type="number" min="0" value="${line.unitPrice}" placeholder="Harga"><strong>${money(Number(line.qty||0)*Number(line.unitPrice||p?.salePrice||0))}</strong>${sale.lines.length>1?`<button type="button" class="remove" data-remove-line="${index}">×</button>`:""}</div>`}).join("")}</div>${sale.paymentType==="bon"?`<div class="bon-note"><span>Seluruh total dicatat sebagai bon. Pembayaran yang sudah ada tetap diperhitungkan.</span><b>${money(totalValue)}</b></div>`:`<div class="cash-box"><label>Uang diterima<input id="cashReceived" type="number" min="${totalValue+fixedDebtApplied}" value="${sale.cashReceived}" required></label><div class="cash-summary"><span>Total<b>${money(totalValue)}</b></span><span>${editing&&fixedDebtApplied?"Cicilan terkait":"Uang lebih"}<b>${money(editing&&fixedDebtApplied?fixedDebtApplied:excess)}</b></span><span>Kembalian<b>${money(change)}</b></span></div></div>${editing&&fixedDebtApplied?`<div class="excess-box">Cicilan bon lama sebesar <b>${money(fixedDebtApplied)}</b> tetap dipertahankan saat transaksi diedit.</div>`:!editing&&excess>0&&sale.customerId&&customerDebts().length?`<div class="excess-box"><label><input id="useExcess" type="checkbox" ${sale.useExcess?"checked":""}> Gunakan uang lebih untuk cicil bon lama</label>${sale.useExcess?`<div class="form-grid"><label>Bon yang dicicil<select id="debtSaleId">${customerDebts().map(d=>`<option value="${d.id}" ${sale.debtSaleId===d.id?"selected":""}>${esc(d.invoiceNo)} · sisa ${money(d.remaining)}</option>`).join("")}</select></label><label>Jumlah cicilan<input id="debtAmount" type="number" min="1" max="${Math.min(excess,Number(target?.remaining||0))}" value="${sale.debtAmount}"></label></div>`:""}</div>`:""}`}${editing?`<label class="edit-reason">Alasan koreksi<input id="editNotes" value="${esc(sale.editNotes)}" placeholder="Contoh: jumlah barang salah input" required></label>`:""}<div class="total-bar"><span>Total transaksi</span><b>${money(totalValue)}</b></div><div class="actions"><button type="button" class="btn outline" data-close-modal>Batal</button><button class="btn primary" ${!totalValue||(sale.paymentType==="tunai"&&cash<totalValue+fixedDebtApplied)||(sale.paymentType==="bon"&&!sale.customerId)||editing&&!sale.editNotes.trim()?"disabled":""}>${editing?"Simpan koreksi":"Simpan transaksi"}</button></div></form>`,true);
+    const excessBox=$("#modalContent .excess-box");
+    if(excessBox&&!editing){
+      excessBox.innerHTML=`<label><input id="useExcess" type="checkbox" ${sale.useExcess?"checked":""}> Gunakan uang lebih untuk cicil bon otomatis</label><small>Otomatis membayar bon paling lama terlebih dahulu.</small>${sale.useExcess?`<div class="allocation-preview"><b>Rencana pembagian ${money(applied)}</b>${debtPlan.map(({debt,amount})=>`<div class="trace-row"><span>${esc(debt.invoiceNo)}<small>${dateTime(debt.createdAt)} · sisa ${money(debt.remaining)}</small></span><b>${money(amount)}</b></div>`).join("")}${change>0?`<div class="trace-row"><span>Sisa menjadi kembalian</span><b>${money(change)}</b></div>`:""}</div>`:""}`;
+    }
     $("#paymentType").onchange=e=>{sale.paymentType=e.target.value;sale.useExcess=false;sale.showNew=false;draw()};
     $("#saleCustomer").onchange=e=>{sale.customerId=e.target.value;sale.useExcess=false;sale.debtSaleId="";sale.debtAmount="";draw()};
     $("#addLine").onclick=()=>{sale.lines.push({productId:"",qty:1,unitPrice:""});draw()};
@@ -154,33 +160,94 @@ function showSaleModal(saleId=""){
     if($("#editNotes"))$("#editNotes").oninput=e=>{sale.editNotes=e.target.value;$("#saleForm .actions .btn.primary").disabled=!sale.editNotes.trim()};
     if($("#toggleNewCustomer"))$("#toggleNewCustomer").onclick=()=>{sale.showNew=!sale.showNew;draw()};
     if($("#newName")){["Name","Phone","Address"].forEach(key=>$("#new"+key).oninput=e=>sale["new"+key]=e.target.value);$("#saveNewCustomer").onclick=async()=>{try{const id=await addCustomer({name:sale.newName,phone:sale.newPhone,address:sale.newAddress});Object.assign(state,await loadData());sale.customerId=id;sale.showNew=false;toast("Pembeli ditambahkan dan dipilih");draw()}catch(error){toast(error.message,true)}}}
-    if($("#useExcess"))$("#useExcess").onchange=e=>{sale.useExcess=e.target.checked;if(sale.useExcess){const d=customerDebts()[0];sale.debtSaleId=d.id;sale.debtAmount=Math.min(excess,Number(d.remaining))}draw()};
+    if($("#useExcess"))$("#useExcess").onchange=e=>{sale.useExcess=e.target.checked;draw()};
     if($("#debtSaleId"))$("#debtSaleId").onchange=e=>{sale.debtSaleId=e.target.value;const d=customerDebts().find(x=>x.id===e.target.value);sale.debtAmount=Math.min(excess,Number(d.remaining));draw()};
     if($("#debtAmount"))$("#debtAmount").onchange=e=>{sale.debtAmount=e.target.value;draw()};
-    $("#saleForm").onsubmit=async event=>{event.preventDefault();try{const payload={paymentType:sale.paymentType,customerId:sale.customerId,cashReceived:sale.cashReceived,items:sale.lines,editNotes:sale.editNotes};const invoice=editing?await updateSale(saleId,payload):await addSale({...payload,debtSaleId:sale.useExcess?sale.debtSaleId:"",debtAmount:sale.useExcess?sale.debtAmount:0});closeModal();await refresh(editing?`Transaksi ${invoice} berhasil dikoreksi`:`Transaksi ${invoice} berhasil dicatat`)}catch(error){toast(error.message,true)}};
+    $("#saleForm").onsubmit=async event=>{event.preventDefault();try{const payload={paymentType:sale.paymentType,customerId:sale.customerId,cashReceived:sale.cashReceived,items:sale.lines,editNotes:sale.editNotes,useExcessForDebts:sale.useExcess};const invoice=editing?await updateSale(saleId,payload):await addSale(payload);closeModal();await refresh(editing?`Transaksi ${invoice} berhasil dikoreksi`:`Transaksi ${invoice} berhasil dicatat`)}catch(error){toast(error.message,true)}};
   };draw();
 }
 
 function showDeleteSaleModal(saleId){
   const sale=state.sales.find(row=>row.id===saleId);if(!sale)return;
-  openModal(`<h2>Hapus transaksi?</h2><p class="subtitle">${esc(sale.invoiceNo)} · ${esc(sale.itemSummary)}</p><div class="warning">Stok akan dikembalikan dan cicilan yang terhubung akan dibatalkan. Jejak pembatalan tetap disimpan.</div><form id="deleteSaleForm" class="form-stack"><label>Alasan pembatalan<textarea name="reason" placeholder="Contoh: transaksi salah input" required></textarea></label><div class="actions"><button type="button" class="btn outline" data-close-modal>Batal</button><button class="btn danger">Hapus & batalkan transaksi</button></div></form>`);
-  $("#deleteSaleForm").onsubmit=async event=>{event.preventDefault();try{await voidSale(saleId,formObject(event.currentTarget).reason);closeModal();await refresh(`Transaksi ${sale.invoiceNo} dibatalkan`)}catch(error){toast(error.message,true)}};
+  openModal(`<h2>Hapus transaksi?</h2><p class="subtitle">${esc(sale.invoiceNo)} · ${esc(sale.itemSummary)}</p><div class="warning">Transaksi dan data pembayaran terkait akan dihapus permanen dari Firebase. Stok serta cicilan yang terhubung akan dikembalikan ke kondisi sebelumnya.</div><form id="deleteSaleForm" class="form-stack"><div class="actions"><button type="button" class="btn outline" data-close-modal>Batal</button><button class="btn danger">Hapus permanen</button></div></form>`);
+  $("#deleteSaleForm").onsubmit=async event=>{event.preventDefault();try{await deleteSale(saleId);closeModal();await refresh(`Transaksi ${sale.invoiceNo} dihapus permanen`)}catch(error){toast(error.message,true)}};
 }
 
 async function showTrace(kind,id){
   openModal('<div class="loading">Memuat jejak data...</div>');
   try{const data=await getTrace(kind,id);let html="";
     if(kind==="transaction"){const s=data.sale;html=`<h2>${esc(s.invoiceNo)}</h2><p class="subtitle">${dateTime(s.createdAt)} · ${statusBadge(s)}</p><div class="total-bar"><span>Total transaksi</span><b>${money(s.total)}</b></div><div class="trace-block"><h3>Pembeli</h3><button class="trace-row btn outline" ${s.customerId?`data-jump-kind="customer" data-jump-id="${s.customerId}"`:"disabled"}>${esc(s.customerName)}<span>›</span></button></div><div class="trace-block"><h3>Barang dibeli</h3>${data.items.map(item=>`<button class="trace-row btn outline" data-jump-kind="product" data-jump-id="${item.productId}"><span>${esc(item.productName)}<small>${qty(item.qty)} ${esc(item.unit)} × ${money(item.unitPrice)}</small></span><b>${money(item.subtotal)}</b></button>`).join("")}</div><div class="trace-block"><h3>Pembayaran</h3><div class="trace-row"><span>Total belanja</span><b>${money(s.total)}</b></div>${s.paymentType==="tunai"?`<div class="trace-row"><span>Uang diterima</span><b>${money(s.cashReceived)}</b></div><div class="trace-row"><span>Kembalian</span><b>${money(s.changeReturned)}</b></div>`:""}<div class="trace-row"><span>Sisa bon</span><b>${money(s.remaining)}</b></div>${data.payments.map(p=>`<div class="trace-row"><span>${esc(p.method)}<small>${dateTime(p.createdAt)}</small></span><b>${money(p.amount)}</b></div>`).join("")}</div>${data.allocations.length?`<div class="trace-block"><h3>Uang lebih dialihkan</h3>${data.allocations.map(p=>`<button class="trace-row btn outline" data-jump-kind="transaction" data-jump-id="${p.saleId}"><span>${esc(p.targetInvoiceNo)}</span><b>${money(p.amount)}</b></button>`).join("")}</div>`:""}`}
+    if(kind==="transaction"&&data.payments.some(payment=>payment.sourceSaleId))html+=`<div class="trace-block"><h3>Sumber cicilan</h3>${data.payments.filter(payment=>payment.sourceSaleId).map(payment=>`<button class="trace-row btn outline" data-jump-kind="transaction" data-jump-id="${payment.sourceSaleId}"><span>Transaksi pembayaran<small>${esc(payment.notes||"")} · ${dateTime(payment.createdAt)}</small></span><b>${money(payment.amount)}</b></button>`).join("")}</div>`;
     if(kind==="transaction"&&data.sale.editCount)html+=`<div class="warning">Sudah dikoreksi ${data.sale.editCount} kali. Koreksi terakhir: ${esc(data.sale.editNotes||"-")}${data.sale.updatedAt?` · ${dateTime(data.sale.updatedAt)}`:""}</div>`;
     if(kind==="transaction")html+=`<div class="actions trace-actions"><button class="btn outline" data-action="edit-sale" data-id="${id}">Edit transaksi</button><button class="btn danger" data-action="delete-sale" data-id="${id}">Hapus transaksi</button></div>`;
     if(kind==="customer"){const c=data.customer;html=`<h2>${esc(c.name)}</h2><p class="subtitle">${esc(c.phone||"Tanpa telepon")} · ${esc(c.address||"Alamat belum diisi")}</p><div class="total-bar"><span>Total sisa bon</span><b>${money(c.debtBalance)}</b></div><div class="trace-block"><h3>Riwayat transaksi</h3>${data.transactions.length?data.transactions.map(s=>`<button class="trace-row btn outline" data-jump-kind="transaction" data-jump-id="${s.id}"><span>${esc(s.invoiceNo)}<small>${dateTime(s.createdAt)} · ${esc(s.itemSummary)}</small></span><b>${money(s.total)}</b></button>`).join(""):empty("Belum ada transaksi","")}</div>`}
     if(kind==="product"){const p=data.product;html=`<h2>${esc(p.name)}</h2><p class="subtitle">${esc(p.sku)} · stok ${qty(p.stock)} ${esc(p.unit)}</p><div class="trace-block"><h3>Pergerakan stok</h3>${data.movements.length?data.movements.map(m=>`<div class="trace-row"><span>${esc(m.movementType)}<small>${dateTime(m.createdAt)} · ${esc(m.notes||"")}</small></span><b>${m.qtyChange>0?"+":""}${qty(m.qtyChange)} → ${qty(m.balanceAfter)}</b></div>`).join(""):empty("Belum ada pergerakan","")}</div><div class="trace-block"><h3>Transaksi barang</h3>${data.transactions.map(row=>`<button class="trace-row btn outline" data-jump-kind="transaction" data-jump-id="${row.sale.id}"><span>${esc(row.sale.invoiceNo)}<small>${dateTime(row.sale.createdAt)} · ${esc(row.sale.customerName)}</small></span><b>${money(row.subtotal)}</b></button>`).join("")}</div>`}
     if(kind==="customer"&&data.customer.archived!==true)html+=`<div class="actions trace-actions"><button class="btn outline" data-action="edit-customer" data-id="${id}">Edit pembeli</button><button class="btn danger" data-action="delete-customer" data-id="${id}">Hapus pembeli</button></div>`;
     if(kind==="product"&&data.product.archived!==true)html+=`<div class="actions trace-actions"><button class="btn outline" data-action="edit-product" data-id="${id}">Edit barang</button><button class="btn danger" data-action="delete-product" data-id="${id}">Hapus barang</button></div>`;
-    openModal(html);document.querySelectorAll("[data-jump-kind]").forEach(button=>button.onclick=()=>showTrace(button.dataset.jumpKind,button.dataset.jumpId));
+    openModal(html);
+    document.querySelectorAll("[data-jump-kind]").forEach(button=>{
+      const kind=button.dataset.jumpKind,id=button.dataset.jumpId;
+      const missing=(kind==="product"&&!state.allProducts.some(row=>row.id===id))
+        ||(kind==="customer"&&!state.allCustomers.some(row=>row.id===id))
+        ||(kind==="transaction"&&!state.sales.some(row=>row.id===id));
+      if(missing){
+        button.disabled=true;
+        button.title="Data tujuan sudah dihapus";
+        button.removeAttribute("data-jump-kind");
+        button.removeAttribute("data-jump-id");
+      }else button.onclick=()=>showTrace(kind,id);
+    });
   }catch(error){openModal(empty("Jejak gagal dibuka",error.message))}
 }
 
-async function exportExcel(){
-  try{const data=await getExportData();const xmlEsc=value=>esc(value).replaceAll("'","&apos;");const sheets=[{name:"Barang",rows:data.products},{name:"Pembeli",rows:data.customers},{name:"Transaksi",rows:data.sales.map(s=>{const row={...s};delete row.items;return row})},{name:"Item Transaksi",rows:data.sales.flatMap(s=>(s.items||[]).map(i=>({invoice:s.invoiceNo,tanggal:s.createdAt,pembeli:s.customerName,dibatalkan:s.voided===true?"Ya":"Tidak",...i})))},{name:"Pembayaran Bon",rows:data.payments},{name:"Pergerakan Stok",rows:data.movements}];const worksheets=sheets.map(sheet=>{const headers=sheet.rows.length?Object.keys(sheet.rows[0]):["Belum ada data"];return`<Worksheet ss:Name="${sheet.name}"><Table><Row>${headers.map(h=>`<Cell><Data ss:Type="String">${xmlEsc(h)}</Data></Cell>`).join("")}</Row>${sheet.rows.map(row=>`<Row>${headers.map(h=>`<Cell><Data ss:Type="${typeof row[h]==="number"?"Number":"String"}">${xmlEsc(row[h])}</Data></Cell>`).join("")}</Row>`).join("")}</Table></Worksheet>`}).join("");const blob=new Blob([`<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">${worksheets}</Workbook>`],{type:"application/vnd.ms-excel"});const url=URL.createObjectURL(blob),link=document.createElement("a");link.href=url;link.download=`Data-Koprasi-${new Date().toISOString().slice(0,10)}.xls`;link.click();URL.revokeObjectURL(url);toast("File Excel berhasil dibuat")}catch(error){toast(error.message,true)}
+function showExportModal(){
+  const today=jakartaDate(new Date()),firstDay=`${today.slice(0,8)}01`;
+  openModal(`<h2>Ekspor Excel</h2><p class="subtitle">Pilih periode laporan transaksi.</p><form id="exportForm" class="form-stack"><div class="form-grid"><label>Tanggal awal<input name="startDate" type="date" value="${firstDay}" required></label><label>Tanggal akhir<input name="endDate" type="date" value="${today}" required></label></div><div class="bon-note"><span>Isi laporan</span><small>Transaksi, pembayaran bon, dan pergerakan stok mengikuti rentang tanggal. Daftar barang dan pembeli berisi data aktif saat ini.</small></div><div class="actions"><button type="button" class="btn outline" data-close-modal>Batal</button><button class="btn primary">Unduh Excel</button></div></form>`);
+  $("#exportForm").onsubmit=async event=>{
+    event.preventDefault();
+    const {startDate,endDate}=formObject(event.currentTarget);
+    if(startDate>endDate){toast("Tanggal awal tidak boleh melewati tanggal akhir",true);return}
+    const submit=event.currentTarget.querySelector("button[type='submit'], button:not([type])");
+    if(submit)submit.disabled=true;
+    const success=await exportExcel(startDate,endDate);
+    if(success)closeModal();else if(submit)submit.disabled=false;
+  };
+}
+
+async function exportExcel(startDate,endDate){
+  try{
+    const data=await getExportData();
+    const inRange=value=>{const date=jakartaDate(value);return date>=startDate&&date<=endDate};
+    const sales=data.sales.filter(row=>inRange(row.createdAt));
+    const payments=data.payments.filter(row=>inRange(row.createdAt));
+    const movements=data.movements.filter(row=>inRange(row.createdAt));
+    const xmlEsc=value=>{
+      const normalized=value&&typeof value==="object"?JSON.stringify(value):value;
+      return esc(normalized).replaceAll("'","&apos;");
+    };
+    const sheets=[
+      {name:"Barang",rows:data.products},
+      {name:"Pembeli",rows:data.customers},
+      {name:"Transaksi",rows:sales.map(s=>{const row={...s};delete row.items;return row})},
+      {name:"Item Transaksi",rows:sales.flatMap(s=>(s.items||[]).map(i=>({invoice:s.invoiceNo,tanggal:s.createdAt,pembeli:s.customerName,...i})))},
+      {name:"Pembayaran Bon",rows:payments},
+      {name:"Pergerakan Stok",rows:movements}
+    ];
+    const worksheets=sheets.map(sheet=>{
+      const headers=sheet.rows.length?Object.keys(sheet.rows[0]):["Belum ada data"];
+      const headerXml=headers.map(header=>`<Cell><Data ss:Type="String">${xmlEsc(header)}</Data></Cell>`).join("");
+      const rowXml=sheet.rows.map(row=>`<Row>${headers.map(header=>{
+        const value=row[header],isNumber=typeof value==="number"&&Number.isFinite(value);
+        return `<Cell><Data ss:Type="${isNumber?"Number":"String"}">${xmlEsc(value)}</Data></Cell>`;
+      }).join("")}</Row>`).join("");
+      return `<Worksheet ss:Name="${sheet.name}"><Table><Row>${headerXml}</Row>${rowXml}</Table></Worksheet>`;
+    }).join("");
+    const workbook=`<?xml version="1.0"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">${worksheets}</Workbook>`;
+    const blob=new Blob([workbook],{type:"application/vnd.ms-excel"});
+    const url=URL.createObjectURL(blob),link=document.createElement("a");
+    link.href=url;link.download=`Data-Koprasi-${startDate}-sampai-${endDate}.xls`;link.click();
+    setTimeout(()=>URL.revokeObjectURL(url),0);
+    toast(`Laporan ${startDate} sampai ${endDate} berhasil dibuat`);
+    return true;
+  }catch(error){toast(error.message,true);return false}
 }

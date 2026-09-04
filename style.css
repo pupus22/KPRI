@@ -7,3 +7,4 @@
 .sale-line [data-field="unitPrice"]{display:none}.sale-line{grid-template-columns:minmax(250px,1.8fr) 90px 120px 38px}
 @media(max-width:900px){.sale-line{grid-template-columns:1fr 85px 110px 38px}.sale-line strong{grid-column:auto}}
 @media(max-width:640px){.sale-line{grid-template-columns:1fr 1fr 34px}.sale-line select{grid-column:1/-1}.sale-line [data-field="qty"]{grid-column:1}.sale-line strong{grid-column:2;text-align:right}.sale-line .remove{grid-column:3;grid-row:2}}
+.allocation-preview{margin-top:12px}.allocation-preview>b{display:block;margin-bottom:8px}.trace-row small,.excess-box small{display:block;color:var(--muted);margin-top:3px}

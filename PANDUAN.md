@@ -142,13 +142,16 @@ Jika langkah ini dilewati, login di alamat GitHub Pages dapat ditolak Firebase.
 3. Tambahkan satu barang percobaan.
 4. Coba transaksi tunai tanpa nama.
 5. Buat pembeli dan coba transaksi bon.
-6. Pada menu **Transaksi**, gunakan tombol **Edit** untuk mengoreksi item, jumlah, harga, pembeli, atau pembayaran. Alasan koreksi wajib diisi.
-7. Gunakan tombol **Hapus** untuk membatalkan transaksi salah. Stok dikembalikan dan cicilan terkait dibalik secara otomatis; jejak pembatalannya tetap disimpan.
+6. Pada menu **Transaksi**, gunakan tombol **Edit** untuk mengoreksi item, jumlah, pembeli, atau jenis pembayaran. Harga tetap otomatis mengikuti Master Barang. Alasan koreksi wajib diisi.
+7. Gunakan tombol **Hapus** untuk menghapus transaksi salah secara permanen dari Firebase. Stok dikembalikan dan cicilan terkait dibalik secara otomatis.
 8. Menu **Bon**, **Barang**, dan **Pembeli** juga memiliki tombol **Edit** dan **Hapus**.
-9. Menghapus barang akan menyembunyikannya dari pilihan penjualan baru. Stok dan riwayat lamanya tetap tersimpan untuk pelacakan.
-10. Pembeli yang masih mempunyai bon tidak dapat dihapus sebelum bon dilunasi atau transaksi bon dibatalkan.
+9. Menghapus barang akan menghapus master barang beserta pergerakan stoknya dari Firebase. Nama, jumlah, dan harga barang pada transaksi lama tetap ada sebagai salinan transaksi.
+10. Menghapus pembeli akan menghapus master pembeli dari Firebase, tetapi nama pada transaksi lama tetap ada sebagai salinan transaksi. Pembeli yang masih mempunyai bon tidak dapat dihapus sebelum bon dilunasi atau transaksi bon dihapus.
 11. Saat mencatat transaksi, petugas hanya mengisi jumlah barang. Harga otomatis diambil dari **Harga Jual** pada Master Barang dan tidak dapat diedit dari transaksi.
-6. Coba pembayaran bon serta Ekspor Excel.
+12. Jika transaksi tunai menggunakan nama pembeli yang mempunyai bon dan terdapat uang lebih, centang **Gunakan uang lebih untuk cicil bon otomatis**.
+13. Aplikasi menampilkan rencana pembagian pembayaran mulai dari bon paling lama. Jika semua bon sudah lunas dan masih ada sisa uang, sisanya menjadi kembalian.
+14. Setelah transaksi disimpan, buka detail transaksi untuk melihat seluruh bon tujuan. Setiap nomor bon dapat diklik, dan pada detail bon terdapat tautan kembali ke transaksi sumber cicilan.
+15. Coba pembayaran bon serta **Ekspor Excel**. Pilih tanggal awal dan akhir; sheet transaksi, pembayaran bon, dan pergerakan stok mengikuti periode tersebut. Sheet barang dan pembeli berisi data aktif saat ini.
 
 ## Alur data yang dipakai
 
@@ -167,4 +170,5 @@ Jika langkah ini dilewati, login di alamat GitHub Pages dapat ditolak Firebase.
 - Setiap revisi cukup edit file lalu upload ulang ke GitHub.
 - GitHub Pages menjadi tempat aplikasi; Firebase menjadi login dan database.
 - Data aplikasi lama tidak otomatis masuk ke Firebase baru.
-- Gunakan **Ekspor Excel** secara berkala untuk laporan operasional.
+- Data yang dihapus lewat aplikasi tidak ikut tampil pada Excel dan dokumennya dihapus dari Firebase.
+- Gunakan **Ekspor Excel** secara berkala untuk laporan operasional dan pilih rentang tanggal yang diperlukan.
